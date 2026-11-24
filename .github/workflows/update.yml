@@ -1,0 +1,48 @@
+name: 경기 결과 업데이트
+
+on:
+  schedule:
+    # 한국 시간 14:00~24:50, 10분마다 깨어나지만 "끝났을 시간이 지났는데 결과가 빈 경기"가 있을 때만 공식 누리집에 접속한다
+    - cron: "*/10 5-15 * * *"
+    # 한국 시간 03:00, 하루 한 번 시즌 전체 일정과 공식 순위를 다시 읽는다
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "auto 또는 full"
+        default: auto
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-results
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: 결과 모으기
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ "${{ github.event.schedule }}" = "0 18 * * *" ]; then MODE=full; fi
+          node collector/collect.mjs "${MODE:-auto}"
+      - name: 바뀐 게 있으면 올리기
+        run: |
+          if [ -n "$(git status --porcelain data)" ]; then
+            git config user.name "jikgwan-fairy-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data
+            git commit -m "경기 결과 업데이트 $(TZ=Asia/Seoul date +'%m/%d %H:%M')"
+            git push
+          fi

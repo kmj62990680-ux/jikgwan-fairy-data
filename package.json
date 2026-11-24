@@ -1,0 +1,12 @@
+{
+  "name": "jikgwan-fairy-data",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "auto": "node collector/collect.mjs auto",
+    "full": "node collector/collect.mjs full"
+  },
+  "dependencies": {
+    "puppeteer-core": "^23.10.4"
+  }
+}
