@@ -14,14 +14,21 @@ const MODE = process.argv[2] || "auto";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const DATA = path.join(ROOT, "data");
 const CHROME = process.env.CHROME_PATH || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const DURATION_MIN = { kbl: 120, wkbl: 120, vm: 150, vw: 150 }; // 시작 후 이만큼 지나면 끝났다고 본다
+const DURATION_MIN = { kbl: 120, wkbl: 120, vm: 150, vw: 150, kbo: 240, k1: 130, k2: 130 }; // 시작 후 이만큼 지나면 끝났다고 본다
 const SEASON_MONTHS = ["2026-10", "2026-11", "2026-12", "2027-01", "2027-02", "2027-03", "2027-04"];
+// 야구 · 축구는 한 해가 한 시즌. 2026 시즌은 끝났지만 "올해 간 경기"를 고를 수 있게 넣어 둔다
+const SUMMER_YEAR = "2026";
+const KBO_MONTHS = ["03", "04", "05", "06", "07", "08", "09", "10"];
+const KLEAGUE_MONTHS = ["02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"];
 
 const TEAMS = {
   kbl: { 소노: "고양 소노", KT: "수원 KT", LG: "창원 LG", DB: "원주 DB", 삼성: "서울 삼성", SK: "서울 SK", 정관장: "안양 정관장", 한국가스공사: "대구 한국가스공사", 현대모비스: "울산 현대모비스", KCC: "부산 KCC" },
   wkbl: { KB스타즈: "청주 KB스타즈", "BNK 썸": "부산 BNK", BNK썸: "부산 BNK", 삼성생명: "용인 삼성생명", 하나은행: "부천 하나은행", 신한은행: "인천 신한은행", 우리은행: "아산 우리은행" },
   vm: { 대한항공: "대한항공", 현대캐피탈: "현대캐피탈", KB손해보험: "KB손해보험", 삼성화재: "삼성화재", 우리카드: "우리카드", OK저축은행: "OK저축은행", 한국전력: "한국전력" },
-  vw: { 흥국생명: "흥국생명", 현대건설: "현대건설", 정관장: "정관장", IBK기업은행: "IBK기업은행", GS칼텍스: "GS칼텍스", 한국도로공사: "한국도로공사", SOOP: "SOOP 수퍼스" }
+  vw: { 흥국생명: "흥국생명", 현대건설: "현대건설", 정관장: "정관장", IBK기업은행: "IBK기업은행", GS칼텍스: "GS칼텍스", 한국도로공사: "한국도로공사", SOOP: "SOOP 수퍼스" },
+  kbo: { KIA: "KIA 타이거즈", 삼성: "삼성 라이온즈", KT: "KT 위즈", LG: "LG 트윈스", 두산: "두산 베어스", SSG: "SSG 랜더스", 롯데: "롯데 자이언츠", NC: "NC 다이노스", 한화: "한화 이글스", 키움: "키움 히어로즈" },
+  k1: { 강원: "강원FC", 광주: "광주FC", 김천: "김천상무", 대전: "대전하나시티즌", 부천: "부천FC", 서울: "FC서울", 안양: "FC안양", 울산: "울산HD", 인천: "인천유나이티드", 전북: "전북현대", 제주: "제주SK", 포항: "포항스틸러스" },
+  k2: { 경남: "경남FC", 김포: "김포FC", 김해: "김해FC", 대구: "대구FC", 부산: "부산아이파크", 서울E: "서울이랜드", 성남: "성남FC", 수원: "수원삼성", 수원FC: "수원FC", 안산: "안산그리너스", 용인: "용인FC", 전남: "전남드래곤즈", 천안: "천안시티FC", 충남아산: "충남아산FC", 충북청주: "충북청주FC", 파주: "파주프런티어", 화성: "화성FC" }
 };
 const STANDING_NAMES = {
   wkbl: { 신한은행: "인천 신한은행", 삼성생명: "용인 삼성생명", 우리은행: "아산 우리은행", "BNK 썸": "부산 BNK", BNK썸: "부산 BNK", KB스타즈: "청주 KB스타즈", 하나은행: "부천 하나은행" }
@@ -138,6 +145,55 @@ async function readKOVO(page) {
   return res;
 }
 
+// KBO: 공식 누리집이 일정 화면에 쓰는 데이터를 그 화면 안에서 같은 방식으로 받는다(정규시즌만)
+async function readKBO(page, months) {
+  await page.goto("https://www.koreabaseball.com/Schedule/Schedule.aspx", { waitUntil: "networkidle2", timeout: 60000 });
+  const out = [];
+  for (const mm of months) {
+    const rows = await page.evaluate(async (year, mm) => {
+      const body = new URLSearchParams({ leId: "1", srIdList: "0,9,6", seasonId: year, gameMonth: mm, teamId: "" });
+      const res = await fetch("/ws/Schedule.asmx/GetScheduleList", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8" }, body });
+      const j = await res.json();
+      const strip = (h) => { const d = document.createElement("div"); d.innerHTML = h; return d; };
+      const res2 = []; let day = null;
+      for (const r of j.rows || []) {
+        const cells = r.row;
+        const dc = cells.find((c) => c.Class === "day"); if (dc) day = /(\d{2})\.(\d{2})/.exec(dc.Text);
+        const tc = cells.find((c) => c.Class === "time"), pc = cells.find((c) => c.Class === "play");
+        if (!day || !tc || !pc) continue;
+        const note = (cells[cells.length - 1].Text || "").trim();
+        if (/취소|연기/.test(note)) continue;
+        const d = strip(pc.Text); const spans = [...d.querySelectorAll(":scope > span")].map((x) => x.textContent.trim());
+        const sc = [...d.querySelectorAll("em span")].map((x) => x.textContent.trim());
+        const away = spans[0], home = spans[spans.length - 1];
+        const as = /^\d+$/.test(sc[0] || "") ? +sc[0] : null, hs = /^\d+$/.test(sc[2] || "") ? +sc[2] : null;
+        res2.push([year + "-" + day[1] + "-" + day[2], strip(tc.Text).textContent.trim(), home, away, hs, as]);
+      }
+      return res2;
+    }, SUMMER_YEAR, mm);
+    out.push(...rows);
+  }
+  return out.map(([d, t, h, a, hs, as]) => [d, t || "18:30", name("kbo", h), name("kbo", a), hs, as]);
+}
+
+// K리그: 공식 누리집 일정 화면이 쓰는 데이터를 그 화면 안에서 받는다(리그 경기만, 승강 플레이오프 · 컵 대회 제외)
+async function readKLeague(page, lg) {
+  const leagueId = lg === "k1" ? "1" : "2";
+  await page.goto("https://www.kleague.com/schedule.do?leagueId=" + leagueId, { waitUntil: "networkidle2", timeout: 60000 });
+  const out = [];
+  for (const mm of KLEAGUE_MONTHS) {
+    const rows = await page.evaluate(async (leagueId, year, mm) => {
+      const res = await fetch("/getScheduleList.do", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leagueId, teamId: "", year, month: mm, ticketYn: "" }) });
+      const j = await res.json();
+      return (j.data.scheduleList || [])
+        .filter((g) => String(g.leagueId) === leagueId && /K리그[12] \d{4}$/.test(g.meetName || ""))
+        .map((g) => [g.gameDate.replace(/\./g, "-"), g.gameTime || "19:00", g.homeTeamName, g.awayTeamName, g.endYn === "Y" ? g.homeGoal : null, g.endYn === "Y" ? g.awayGoal : null]);
+    }, leagueId, SUMMER_YEAR, mm);
+    out.push(...rows);
+  }
+  return out.map(([d, t, h, a, hs, as]) => [d, t, name(lg, h), name(lg, a), hs, as]);
+}
+
 function name(lg, raw) {
   const v = TEAMS[lg][raw];
   if (!v) throw new Error("모르는 팀 이름: " + lg + " " + raw);
@@ -178,8 +234,9 @@ function recordFrom(games) {
   const r = {};
   for (const [, , h, a, hs, as] of games) {
     if (hs === null) continue;
+    if (hs === as) { (r[h] = r[h] || [0, 0, 0])[2] = (r[h][2] || 0) + 1; (r[a] = r[a] || [0, 0, 0])[2] = (r[a][2] || 0) + 1; continue; }
     const [w, l] = hs > as ? [h, a] : [a, h];
-    (r[w] = r[w] || [0, 0])[0]++; (r[l] = r[l] || [0, 0])[1]++;
+    (r[w] = r[w] || [0, 0, 0])[0]++; (r[l] = r[l] || [0, 0, 0])[1]++;
   }
   return r;
 }
@@ -191,7 +248,7 @@ async function main() {
   const standings = readJSON("standings.json", { asOf: null, leagues: {} });
   let targets;
   if (MODE === "full") {
-    targets = { kbl: new Set(SEASON_MONTHS), wkbl: new Set(SEASON_MONTHS.filter((m) => m >= "2026-11")), vm: true, vw: true };
+    targets = { kbl: new Set(SEASON_MONTHS), wkbl: new Set(SEASON_MONTHS.filter((m) => m >= "2026-11")), vm: true, vw: true, kbo: true, k1: true, k2: true };
   } else {
     targets = dueLeagues(schedule);
     if (!Object.keys(targets).length) { log("확인할 경기 없음 — 공식 누리집에 접속하지 않음"); return; }
@@ -214,6 +271,8 @@ async function main() {
     if (targets.kbl) { const k = await readKBL(page, targets.kbl); log("KBL 읽음", k.length); merge("kbl", k); }
     if (targets.wkbl) { const w = await readWKBL(page, targets.wkbl); log("WKBL 읽음", w.length); merge("wkbl", w); }
     if (targets.vm || targets.vw) { const k = await readKOVO(page); if (targets.vm) merge("vm", k.vm); if (targets.vw) merge("vw", k.vw); }
+    if (targets.kbo) { const k = await readKBO(page, KBO_MONTHS); log("KBO 읽음", k.length); merge("kbo", k); }
+    for (const lg of ["k1", "k2"]) if (targets[lg]) { const k = await readKLeague(page, lg); log(lg + " 읽음", k.length); merge(lg, k); }
 
     const changed = JSON.stringify(next) !== JSON.stringify(schedule.leagues);
     if (changed) {
@@ -229,6 +288,10 @@ async function main() {
           const c = calc[team] || [0, 0];
           if (c[0] !== wl[0] || c[1] !== wl[1]) log("경고: 순위와 결과가 다름", lg, team, "공식", wl.join("-"), "결과", c.join("-"));
         }
+      }
+      for (const lg of ["kbo", "k1", "k2"]) {
+        const calc = recordFrom(next[lg] || []), off2 = (standings.leagues || {})[lg] || {};
+        for (const [team, wl] of Object.entries(off2)) { const c = calc[team] || [0, 0, 0]; if (c[0] !== wl[0] || c[1] !== wl[1] || (wl[2] || 0) !== (c[2] || 0)) log("경고: 순위와 결과가 다름", lg, team, "공식", wl.join("-"), "결과", c.join("-")); }
       }
       const kept = standings.leagues || {};
       writeJSON("standings.json", { asOf: kstString().slice(0, 10), leagues: { ...kept, ...off } });
