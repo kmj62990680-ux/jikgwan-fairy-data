@@ -183,7 +183,7 @@ async function readKLeague(page, lg) {
   const out = [];
   for (const mm of KLEAGUE_MONTHS) {
     const rows = await page.evaluate(async (leagueId, year, mm) => {
-      const res = await fetch("/getScheduleList.do", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ leagueId, teamId: "", year, month: mm, ticketYn: "" }) });
+      const res = await fetch("/getScheduleList.do", { method: "POST", headers: { "Content-Type": "application/json", "Accept-Language": "ko-KR,ko;q=0.9" }, body: JSON.stringify({ leagueId, teamId: "", year, month: mm, ticketYn: "" }) });
       const j = await res.json();
       return (j.data.scheduleList || [])
         .filter((g) => String(g.leagueId) === leagueId && /K리그[12] \d{4}$/.test(g.meetName || ""))
@@ -260,6 +260,7 @@ async function main() {
     const page = await browser.newPage();
     await page.setUserAgent((await browser.userAgent()).replace("HeadlessChrome", "Chrome") + " jikgwan-fairy-results/1.0"); // 일반 크롬 표시 + 수집기 이름
     await page.setViewport({ width: 1280, height: 1600 }); // 좁으면 WKBL 일정이 달력 모양으로 바뀐다
+    await page.setExtraHTTPHeaders({ "Accept-Language": "ko-KR,ko;q=0.9" }); // 해외 서버(GitHub)에서 돌면 K리그가 영어 팀 이름을 준다(11/25 실패 원인)
     const next = { ...schedule.leagues };
     const merge = (lg, fresh) => {
       const months = new Set(fresh.map((g) => g[0].slice(0, 7)));
@@ -268,11 +269,13 @@ async function main() {
       if (played(merged) < played(next[lg] || [])) throw new Error(lg + ": 끝난 경기 수가 줄어듦 — 쓰지 않음");
       next[lg] = merged;
     };
-    if (targets.kbl) { const k = await readKBL(page, targets.kbl); log("KBL 읽음", k.length); merge("kbl", k); }
-    if (targets.wkbl) { const w = await readWKBL(page, targets.wkbl); log("WKBL 읽음", w.length); merge("wkbl", w); }
-    if (targets.vm || targets.vw) { const k = await readKOVO(page); if (targets.vm) merge("vm", k.vm); if (targets.vw) merge("vw", k.vw); }
-    if (targets.kbo) { const k = await readKBO(page, KBO_MONTHS); log("KBO 읽음", k.length); merge("kbo", k); }
-    for (const lg of ["k1", "k2"]) if (targets[lg]) { const k = await readKLeague(page, lg); log(lg + " 읽음", k.length); merge(lg, k); }
+    // 한 리그가 실패해도 다른 리그 결과는 반영한다(실패한 리그는 이전 결과 유지, 경고만 남김)
+    const safe = async (lg, fn) => { try { await fn(); } catch (e) { console.log(`::warning::${lg} 읽기 실패 — 이전 결과 유지: ${e.message}`); } };
+    if (targets.kbl) await safe("kbl", async () => { const k = await readKBL(page, targets.kbl); log("KBL 읽음", k.length); merge("kbl", k); });
+    if (targets.wkbl) await safe("wkbl", async () => { const w = await readWKBL(page, targets.wkbl); log("WKBL 읽음", w.length); merge("wkbl", w); });
+    if (targets.vm || targets.vw) await safe("kovo", async () => { const k = await readKOVO(page); if (targets.vm) merge("vm", k.vm); if (targets.vw) merge("vw", k.vw); });
+    if (targets.kbo) await safe("kbo", async () => { const k = await readKBO(page, KBO_MONTHS); log("KBO 읽음", k.length); merge("kbo", k); });
+    for (const lg of ["k1", "k2"]) if (targets[lg]) await safe(lg, async () => { const k = await readKLeague(page, lg); log(lg + " 읽음", k.length); merge(lg, k); });
 
     const changed = JSON.stringify(next) !== JSON.stringify(schedule.leagues);
     if (changed) {
